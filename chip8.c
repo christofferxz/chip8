@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <time.h>
 
 #include <SDL.h>
 
@@ -18,6 +19,7 @@ typedef struct {
   uint32_t bg_color;  // Background color RGBA8888
   uint32_t scale_factor;  // Amount to scale a CHIP8 pixel by e.g. 20x will be a 20x larger window
   bool pixel_outlines;  // Draw pixel outlines Y\N;
+  uint32_t insts_per_second;  // CHIP8 CPU "clock rate" or hz
 } config_t;
 
 // Emulator states
@@ -94,6 +96,7 @@ bool set_config_from_args(config_t *config, const int argc, char **argv) {
     .fg_color = 0x06f82bFF, // GREEN
     .bg_color = 0x00000000, // BLACK
     .pixel_outlines = true, // Draw pixel outlines by default
+    .insts_per_second = 500,  // Number of instructions to emulate in 1 second (clock rate of CPU)
   };
 
   // Skip compiler unused variables (argc/argv) error
@@ -227,6 +230,11 @@ void update_screen(const sdl_t sdl, const config_t config, const chip8_t chip8) 
 };
 
 // Handle user inputs
+// CHIP8 Keypad   QWERTY
+// 123C           1234
+// 456D           qwer
+// 789E           asdf
+// A0BF           zxcv
 void handle_input(chip8_t *chip8) {
   SDL_Event event;
 
@@ -252,14 +260,58 @@ void handle_input(chip8_t *chip8) {
               puts("==== RESUMED ====");
             };
             return;
-          default:
-            break;
+
+          // Map qwerty keys to CHIP8 Keypad
+          case SDLK_1: chip8->keypad[0x1] = true; break;
+          case SDLK_2: chip8->keypad[0x1] = true; break;
+          case SDLK_3: chip8->keypad[0x1] = true; break;
+          case SDLK_4: chip8->keypad[0xC] = true; break;
+
+          case SDLK_q: chip8->keypad[0x4] = true; break;
+          case SDLK_w: chip8->keypad[0x5] = true; break;
+          case SDLK_e: chip8->keypad[0x6] = true; break;
+          case SDLK_r: chip8->keypad[0xD] = true; break;
+        
+          case SDLK_a: chip8->keypad[0x7] = true; break;
+          case SDLK_s: chip8->keypad[0x8] = true; break;
+          case SDLK_d: chip8->keypad[0x9] = true; break;
+          case SDLK_f: chip8->keypad[0xE] = true; break;
+        
+          case SDLK_z: chip8->keypad[0xA] = true; break;
+          case SDLK_x: chip8->keypad[0x0] = true; break;
+          case SDLK_c: chip8->keypad[0xB] = true; break;
+          case SDLK_v: chip8->keypad[0xF] = true; break;
+
+          default: break;
         };
         break;
       case SDL_KEYUP:
+        switch (event.key.keysym.sym) {
+          // Map qwerty keys to CHIP8 Keypad
+          case SDLK_1: chip8->keypad[0x1] = false; break;
+          case SDLK_2: chip8->keypad[0x1] = false; break;
+          case SDLK_3: chip8->keypad[0x1] = false; break;
+          case SDLK_4: chip8->keypad[0xC] = false; break;
+
+          case SDLK_q: chip8->keypad[0x4] = false; break;
+          case SDLK_w: chip8->keypad[0x5] = false; break;
+          case SDLK_e: chip8->keypad[0x6] = false; break;
+          case SDLK_r: chip8->keypad[0xD] = false; break;
+        
+          case SDLK_a: chip8->keypad[0x7] = false; break;
+          case SDLK_s: chip8->keypad[0x8] = false; break;
+          case SDLK_d: chip8->keypad[0x9] = false; break;
+          case SDLK_f: chip8->keypad[0xE] = false; break;
+        
+          case SDLK_z: chip8->keypad[0xA] = false; break;
+          case SDLK_x: chip8->keypad[0x0] = false; break;
+          case SDLK_c: chip8->keypad[0xB] = false; break;
+          case SDLK_v: chip8->keypad[0xF] = false; break;
+
+          default: break;
+        };
         break;
-      default:
-        break;
+      default: break;
     };
   };
 };
@@ -410,6 +462,10 @@ void print_debug_info(chip8_t *chip8) {
       printf("Set PC to V0 (0x%02X) + NNN (0%04x); Result PC = 0x%04X\n",
               chip8->V[0], chip8->inst.NNN, chip8->V[0] + chip8->inst.NNN);
       break;
+    case 0x0C:
+      // 0xCXNN: Set register VX = rand() & 256 & NN (bitwise AND)
+      printf("Set V%X = rand() %% 256 & NN (0x%02X)\n",
+              chip8->inst.X, chip8->inst.NN);
     case 0x0D:
       // 0xDXYN: Draw N-height sprite at coordinate VX, VY; Read from memory location I;
       //  Screen pixels are XOR'd with sprite bits,
@@ -419,6 +475,73 @@ void print_debug_info(chip8_t *chip8) {
               "from memory location I (0x%04X). Set VF = 1 if any pixel are turned off.\n",
               chip8->inst.N, chip8->inst.X, chip8->V[chip8->inst.X], chip8->inst.Y,
               chip8->V[chip8->inst.Y], chip8->I);
+    case 0x0E:
+      if (chip8->inst.NN == 0x9E) {
+        // 0xEX9E: Skip next instruction if key in VX is pressed
+        printf("Skip next instruction if key in V%X (0x%02X) is pressed; Keypad value: %d\n",
+                chip8->inst.X, chip8->V[chip8->inst.X], chip8->keypad[chip8->V[chip8->inst.X]]);
+      } else if (chip8->inst.NN == 0xA1) {
+        // 0xEX9E: Skip next instruction if key in VX is not pressed
+        printf("Skip next instruction if key in V%X (0x%02X) is not pressed; Keypad value: %d\n",
+                chip8->inst.X, chip8->V[chip8->inst.X], chip8->keypad[chip8->V[chip8->inst.X]]);
+      };
+      break;
+    case 0x0F:
+      switch (chip8->inst.NN) {
+        case 0x0A:
+          // 0xFX0a: VX = get_key(); Await until a keypress, and store in VX
+          printf("Await until a key is pressed; Store key in V%X\n",
+                  chip8->inst.X);
+          break;
+        case 0x1E:
+          // 0xFX1EL I += VX; Add VX to register I. For non-Amiga CHIP8, does not affect VF
+          printf("I (0x%04X) += V%X (0x%02X); Result (I): 0x%04x\n",
+                  chip8->I, chip8->inst.X, chip8->V[chip8->inst.X],
+                  chip8->I + chip8->V[chip8->inst.X]);
+          break;
+        case 0x07:
+          // VX = delay timer
+          printf("Set V%X = delay timer (0x%02X)\n",
+                  chip8->V[chip8->inst.X], chip8->delay_timer);
+          break;
+        case 0x15:
+          // 0xFX15: delay_timer = VX
+          printf("Set delay timer (0x%02X) = V%X\n",
+                  chip8->delay_timer, chip8->V[chip8->inst.X]);
+          break;
+        case 0x18:
+          // 0xFX18: sound timer = VX
+          printf("Set sound timer (0x%02X) = V%X\n",
+                  chip8->sound_timer, chip8->V[chip8->inst.X]);
+          break;
+        case 0x29:
+          // 0xFX29: Set register I to sprite location in memory for character in VX (0x0-0xF)
+          printf("Set I to sprite location in memory for character in V%X (0x%02X). Result (VX*5) = (0x%02X)\n",
+                  chip8->inst.X, chip8->V[chip8->inst.X], chip8->V[chip8->inst.X] * 5);
+          break;
+        case 0x33:
+          // 0xFX33: Store BCD representation of VX at memory offset from I
+          //  I = hundred's place, I+! = ten's place, I+2 = one's place
+          printf("Store BCD representation of V%X (0x%02X) at memory from I (0x%04X)\n",
+                  chip8->inst.X, chip8->V[chip8->inst.X], chip8->I);
+          break;
+        case 0x55:
+          // 0xFX55: Register dump V0-VX inclusive to memory offset from I
+          //  SCHIP does not increment I, CHIP8 does increment I
+          printf("Register dump V0-V%X (0x%02X) inclusive at memory from I (0x%04X)\n",
+                  chip8->inst.X, chip8->V[chip8->inst.X], chip8->I);
+          break;  
+        case 0x65:
+          // 0xFX55: Register dump V0-VX inclusive from memory offset from I
+          //  SCHIP does not increment I, CHIP8 does increment I
+          printf("Register load V0-V%X (0x%02X) inclusive at memory from I (0x%04X)\n",
+                  chip8->inst.X, chip8->V[chip8->inst.X], chip8->I);
+          break;
+        default:
+          printf("Unimplemented or invalid 0xFX opcode\n");
+          break;
+      };
+      break;
     default:
       printf("Unimplemented opcode.\n");
       break;  // Unimplemented or invalid opcode
@@ -526,10 +649,7 @@ void emulate_instruction(chip8_t *chip8, const config_t config) {
           break;
         case 5:
           // 0x8XY5: Set register VX -= VY, set Vf to 1 if there is not a borrow (result is positive/0)
-          if (chip8->V[chip8->inst.Y] <= chip8->V[chip8->inst.X]) {
-            chip8->V[0xF] = 1;
-          };
-          
+          chip8->V[0xF] = chip8->V[chip8->inst.Y] <= chip8->V[chip8->inst.X];
           chip8->V[chip8->inst.X] -= chip8->V[chip8->inst.Y];
           break;
         case 6:
@@ -539,10 +659,7 @@ void emulate_instruction(chip8_t *chip8, const config_t config) {
           break;
         case 7:
           // 0x8XY7: Set VX = VY - VX, set VF to 1 if there is not a borrow (result is positive/0)
-          if (chip8->V[chip8->inst.X] <= chip8->V[chip8->inst.Y]) {
-            chip8->V[0xF] = 1;
-          };
-          
+          chip8->V[0xF] = (chip8->V[chip8->inst.X] <= chip8->V[chip8->inst.Y]);
           chip8->V[chip8->inst.X] = chip8->V[chip8->inst.Y] - chip8->V[chip8->inst.X];
           break;
         case 0xE:
@@ -551,8 +668,7 @@ void emulate_instruction(chip8_t *chip8, const config_t config) {
           chip8->V[chip8->inst.X] <<= 1;
           break;
         default:
-          // Wrong/unimplemented opcode
-          break;
+          break;  // Wrong/unimplemented opcode
       };
       break;
     case 0x09:
@@ -568,6 +684,10 @@ void emulate_instruction(chip8_t *chip8, const config_t config) {
     case 0x0B:
       // 0xBNNN: Jump to V0 + NNN
       chip8->PC = chip8->V[0] + chip8->inst.NNN;
+      break;
+    case 0x0C:
+      // 0xCXNN: Set register VX = rand() & 256 & NN (bitwise AND)
+      chip8->V[chip8->inst.X] = (rand() % 256) & chip8->inst.NN;
       break;
     case 0x0D:
       // 0xDXYN: Draw N-height sprite at coordinate VX, VY; Read from memory location I;
@@ -606,9 +726,100 @@ void emulate_instruction(chip8_t *chip8, const config_t config) {
       };
 
       break;
+    case 0x0E:
+      if (chip8->inst.NN == 0x9E) {
+        // 0xEX9E: Skip next instruction if key in VX is pressed
+        if (chip8->keypad[chip8->V[chip8->inst.X]]) {
+          chip8->PC += 2;
+        };
+      } else if (chip8->inst.NN == 0xA1) {
+        // 0xEX9E: Skip next instruction if key in VX is not pressed
+        if (!chip8->keypad[chip8->V[chip8->inst.X]]) {
+          chip8->PC += 2;
+        };
+      };
+      break;
+    case 0x0F:
+      switch (chip8->inst.NN) {
+        case 0x0A:
+          // 0xFX0A: VX = get_key(); Await until a keypress, and store in VX
+          bool any_key_pressed = false;
+          for (uint8_t i = 0 ; i < sizeof chip8->keypad; i++) {
+            if (chip8->keypad[i]) {
+              chip8->V[chip8->inst.X] = i;  // i = key (offset into keypad array)
+              any_key_pressed = true;
+              break;
+            };
+
+            // If no key has been pressed yet, keep getting the current opcode & running this instruction
+            if (!any_key_pressed) chip8->PC -= 2;
+            break;
+          };
+          break;
+        case 0x1E:
+          // 0xFX1E: I += VX; Add VX to register I. For non-Amiga CHIP8, does not affect VF
+          chip8->I += chip8->V[chip8->inst.X];
+          break;
+        case 0x07:
+          // 0xFX07: VX = delay timer
+          chip8->V[chip8->inst.X] = chip8->delay_timer;
+          break;
+        case 0x15:
+          // 0xFX15: delay_timer = VX
+          chip8->delay_timer = chip8->V[chip8->inst.X];
+          break;
+        case 0x18:
+          // 0xFX18: sound timer = VX
+          chip8->sound_timer = chip8->V[chip8->inst.X];
+          break;
+        case 0x29:
+          // 0xFX29: Set register I to sprite location in memory for character in VX (0x0-0xF)
+          chip8->I = chip8->V[chip8->inst.X] * 5;
+          break;
+        case 0x33:
+          // 0xFX33: Store BCD representation of VX at memory offset from I
+          //  I = hundred's place, I+! = ten's place, I+2 = one's place
+          uint8_t bcd = chip8->V[chip8->inst.X];
+          chip8->ram[chip8->I+2] = bcd % 10;
+          bcd /= 10;
+          chip8->ram[chip8->I+1] = bcd % 10;
+          bcd /= 10;
+          chip8->ram[chip8->I] = bcd;
+          break;
+        case 0x55:
+          // 0xFX55: Register dump V0-VX inclusive to memory offset from I
+          //  SCHIP does not increment I, CHIP8 does increment I
+          // NOTE: Could make this a config flag to use SCHIP or CHIP8 logic for I
+          for (uint8_t i = 0; i <= chip8->inst.X; i++) {
+            chip8->ram[chip8->I + i] = chip8->V[i];
+          };
+          break;  
+        case 0x65:
+          // 0xFX55: Register dump V0-VX inclusive from memory offset from I
+          //  SCHIP does not increment I, CHIP8 does increment I
+          for (uint8_t i = 0; i <= chip8->inst.X; i++) {
+            chip8->V[i] = chip8->ram[chip8->I + i];
+          };
+          break;
+        default:
+          break;
+      };
+      break;
     default:
       break;  // Unimplemented or invalid opcode
-  }
+  };
+};
+
+// Update CHIP8 delay and sound timers every 60hz
+void update_timers(chip8_t *chip8) {
+  if (chip8->delay_timer > 0) chip8->delay_timer--;
+
+  if (chip8->sound_timer > 0) {
+    chip8->delay_timer--; 
+    // TODO: play sound
+  } else {
+    // TODO: stop playing sound
+  };
 };
 
 // Main things
@@ -635,20 +846,35 @@ int main(int argc, char **argv) {
   // Initialize clear screen
   clear_screen(sdl, config);
 
+  // Seed random generator
+  srand(time(NULL));
+
   // Emulator loop
-  while (chip8.state != QUIT) {
+  while (chip8.state != QUIT)  {
     handle_input(&chip8);
 
     if (chip8.state == PAUSED) continue;
 
-    // Emulate CHIP8 Instructions
-    emulate_instruction(&chip8, config);
+    // Get time before running instructions;
+    const uint64_t start_frame_time = SDL_GetPerformanceCounter();
 
-    // Delay for approximately 60hz/60fps (16.67ms)
-    SDL_Delay(16);
+    // Emulate CHIP8 Instructions for this emulator "frame" (60hz)
+    for (uint32_t i = 0; i < config.insts_per_second / 60; i++) {
+      emulate_instruction(&chip8, config);
+    };
 
-    // Update window with changes
+    // Get time elapsed after running instructions;
+    const uint64_t end_frame_time = SDL_GetPerformanceCounter();
+
+    // Delay for approximately 60hz/60fps (16.67ms) or acutal time elapsed
+    double time_elapsed = (double)((end_frame_time - start_frame_time) / 1000) / SDL_GetPerformanceFrequency();
+    SDL_Delay(16.67f > time_elapsed ? 16.67f - time_elapsed : 0);
+
+    // Update window with changes every 60hz
     update_screen(sdl, config, chip8);
+
+    // Update delay & sound timers every 60hz
+    update_timers(&chip8);
   };
 
   // Quit SDL
@@ -656,3 +882,10 @@ int main(int argc, char **argv) {
 
   exit(EXIT_SUCCESS);
 };
+
+
+
+
+
+
+

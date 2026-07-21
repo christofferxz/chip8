@@ -9,3 +9,6 @@ debug:
 
 debugt:
 	gcc tchip8.c -o chip8 `sdl2-config --cflags --libs` $(CFLAGS) -DDEBUG
+
+emcc:
+	emcc chip8.c $(CFLAGS) -sUSE_SDL=2 --preload-file roms -o chip8.html
